@@ -1,9 +1,12 @@
 
 import os, threading, queue
-from settings import DEFAULT_KEYWORDS, PV_ACCESS_KEY
+import numpy as np
 
 try:
-    import pvporcupine, pyaudio, struct
+    import pyaudio
+    import torch
+    from vosk import Model, KaldiRecognizer
+    import json
     VOICE_AVAILABLE = True
 except Exception as e:
     print("[VOICE] Missing dependencies:", e)
@@ -13,6 +16,10 @@ command_queue = queue.Queue()
 voice_ready = False
 listening = True
 
+# Audio settings for Vosk (16kHz required)
+SAMPLE_RATE = 16000
+CHUNK_SIZE = 512
+
 
 def _voice_loop():
     global voice_ready
@@ -21,58 +28,104 @@ def _voice_loop():
         print("[VOICE] Not available.")
         return
 
-    if not PV_ACCESS_KEY or PV_ACCESS_KEY == "YOUR_ACCESS_KEY_HERE":
-        print("[VOICE] ERROR: Access key missing. Add it in settings.py (PV_ACCESS_KEY).")
-        return
-
     try:
-        keyword_dir = "Keywords"
-        keyword_paths = []
+        # Load Silero VAD model
+        model, utils = torch.hub.load(repo_or_dir='snakers4/silero-vad',
+                                       model='silero_vad',
+                                       force_reload=False,
+                                       onnx=False)
+        (get_speech_timestamps, save_audio, read_audio, VADIterator, collect_chunks) = utils
+        
+        # Check for Vosk model
+        vosk_model_path = "vosk-model"
+        if not os.path.exists(vosk_model_path):
+            print(f"[VOICE] ERROR: Vosk model not found at '{vosk_model_path}'")
+            print("[VOICE] Please download a Vosk model from https://alphacephei.com/vosk/models")
+            print("[VOICE] Extract it and rename the folder to 'vosk-model' in the project root")
+            return
+        
+        # Initialize Vosk recognizer
+        vosk_model = Model(vosk_model_path)
+        recognizer = KaldiRecognizer(vosk_model, SAMPLE_RATE)
+        recognizer.SetWords(True)
+        
+        print("[VOICE] Silero VAD and Vosk loaded successfully")
 
-        if os.path.isdir(keyword_dir):
-            for f in sorted(os.listdir(keyword_dir)):
-                if f.lower().endswith(".ppn"):
-                    keyword_paths.append(os.path.join(keyword_dir, f))
-
-        if keyword_paths:
-            porcupine = pvporcupine.create(
-                keyword_paths=keyword_paths,
-                access_key=PV_ACCESS_KEY
-            )
-            keyword_names = [os.path.splitext(os.path.basename(p))[0] for p in keyword_paths]
-            print("[VOICE] Loaded custom .ppn models:", keyword_names)
-        else:
-            porcupine = pvporcupine.create(
-                keywords=DEFAULT_KEYWORDS,
-                access_key=PV_ACCESS_KEY
-            )
-            keyword_names = DEFAULT_KEYWORDS
-            print("[VOICE] Using built-in keywords:", keyword_names)
-
-        # Initialize microphone
+        # Initialize PyAudio
         pa = pyaudio.PyAudio()
         stream = pa.open(
-            rate=porcupine.sample_rate,
+            rate=SAMPLE_RATE,
             channels=1,
             format=pyaudio.paInt16,
             input=True,
-            frames_per_buffer=512
+            frames_per_buffer=CHUNK_SIZE
         )
 
         voice_ready = True
-        print("[VOICE] Listening for:", keyword_names)
+        print("[VOICE] Listening for speech (say 'jump' to make dino jump)...")
+
+        # Buffer to accumulate audio when speech is detected
+        audio_buffer = []
+        is_speaking = False
+        frames_after_speech = 0
+        FRAMES_TO_RECORD = int(0.5 * SAMPLE_RATE / CHUNK_SIZE)  # ~0.5 seconds worth of frames
 
         while listening:
-            pcm = stream.read(512, exception_on_overflow=False)
-            pcm = struct.unpack_from("h" * 512, pcm)
-            index = porcupine.process(pcm)
-            if index >= 0:
-                keyword = keyword_names[index]
-                print(f"[VOICE DETECTED] {keyword}")
-                command_queue.put(keyword)
+            # Read audio chunk
+            pcm_data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
+            
+            # Convert to numpy array for Silero VAD (float32, normalized)
+            audio_int16 = np.frombuffer(pcm_data, dtype=np.int16)
+            audio_float32 = audio_int16.astype(np.float32) / 32768.0
+            audio_tensor = torch.from_numpy(audio_float32)
+            
+            # Get speech probability from Silero VAD
+            speech_prob = model(audio_tensor, SAMPLE_RATE).item()
+            
+            # Detect speech start
+            if speech_prob > 0.6 and not is_speaking:
+                is_speaking = True
+                audio_buffer = [pcm_data]
+                frames_after_speech = 0
+                print(f"[VAD] Speech detected (prob: {speech_prob:.2f})")
+            
+            # Continue recording while speaking or for a short period after
+            elif is_speaking:
+                audio_buffer.append(pcm_data)
+                frames_after_speech += 1
+                
+                # After recording enough frames (~0.5s), process with Vosk
+                if frames_after_speech >= FRAMES_TO_RECORD:
+                    is_speaking = False
+                    
+                    # Concatenate all audio chunks
+                    full_audio = b''.join(audio_buffer)
+                    
+                    # Feed to Vosk recognizer
+                    if recognizer.AcceptWaveform(full_audio):
+                        result = json.loads(recognizer.Result())
+                        text = result.get("text", "").lower()
+                    else:
+                        result = json.loads(recognizer.PartialResult())
+                        text = result.get("partial", "").lower()
+                    
+                    if text:
+                        print(f"[VOICE TRANSCRIBED] '{text}'")
+                        
+                        # Check if "jump" is in the transcribed text
+                        if "jump" in text:
+                            print("[VOICE] Jump command detected!")
+                            command_queue.put("jump")
+                    
+                    # Reset recognizer for next utterance
+                    recognizer = KaldiRecognizer(vosk_model, SAMPLE_RATE)
+                    recognizer.SetWords(True)
+                    audio_buffer = []
 
     except Exception as e:
         print("[VOICE ERROR]:", e)
+        import traceback
+        traceback.print_exc()
 
     finally:
         voice_ready = False
@@ -80,10 +133,6 @@ def _voice_loop():
             stream.stop_stream()
             stream.close()
             pa.terminate()
-        except Exception:
-            pass
-        try:
-            porcupine.delete()
         except Exception:
             pass
         print("[VOICE] Listener stopped.")

@@ -104,7 +104,7 @@ while running:
                     cmd = command_queue.get_nowait().lower()
                     print(f"[VOICE COMMAND RECEIVED] {cmd}  on_ground={on_ground} cooldown={now-last_jump_time}ms")
 
-                    if "jump" in cmd or "jump-dino" in cmd or "porcupine" in cmd:
+                    if "jump" in cmd:
                         if on_ground and now - last_jump_time > JUMP_COOLDOWN:
                             print("[VOICE JUMP TRIGGERED]")
                             vel_y = -JUMP_STRENGTH
