@@ -1,0 +1,21 @@
+
+import os
+
+WIDTH = 800
+HEIGHT = 400
+FPS = 60
+GROUND_Y = 360
+
+PLAYER_W = 70
+PLAYER_H = 70
+JUMP_STRENGTH = 15
+GRAVITY = 1
+DUCK_MS = 400
+
+SCORE_FILE = "scores7.json"
+TOP_SCORES = 5
+
+
+DEFAULT_KEYWORDS = ["porcupine", "bumblebee"]
+
+PV_ACCESS_KEY = "L/Cc3RGVz8+Z4jpXZwwhtqzL21UBiSVDqS1H4htNxk2GRkPcrf103g=="
