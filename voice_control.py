@@ -1,9 +1,7 @@
-
-import os, threading, queue
-from settings import DEFAULT_KEYWORDS, PV_ACCESS_KEY
+import threading, queue
 
 try:
-    import pvporcupine, pyaudio, struct
+    import speech_recognition as sr
     VOICE_AVAILABLE = True
 except Exception as e:
     print("[VOICE] Missing dependencies:", e)
@@ -13,6 +11,9 @@ command_queue = queue.Queue()
 voice_ready = False
 listening = True
 
+# Define wake words that trigger the jump command
+WAKE_WORDS = ["jump", "jump dino", "dino jump"]
+
 
 def _voice_loop():
     global voice_ready
@@ -21,71 +22,53 @@ def _voice_loop():
         print("[VOICE] Not available.")
         return
 
-    if not PV_ACCESS_KEY or PV_ACCESS_KEY == "YOUR_ACCESS_KEY_HERE":
-        print("[VOICE] ERROR: Access key missing. Add it in settings.py (PV_ACCESS_KEY).")
-        return
-
     try:
-        keyword_dir = "Keywords"
-        keyword_paths = []
+        recognizer = sr.Recognizer()
+        microphone = sr.Microphone()
 
-        if os.path.isdir(keyword_dir):
-            for f in sorted(os.listdir(keyword_dir)):
-                if f.lower().endswith(".ppn"):
-                    keyword_paths.append(os.path.join(keyword_dir, f))
-
-        if keyword_paths:
-            porcupine = pvporcupine.create(
-                keyword_paths=keyword_paths,
-                access_key=PV_ACCESS_KEY
-            )
-            keyword_names = [os.path.splitext(os.path.basename(p))[0] for p in keyword_paths]
-            print("[VOICE] Loaded custom .ppn models:", keyword_names)
-        else:
-            porcupine = pvporcupine.create(
-                keywords=DEFAULT_KEYWORDS,
-                access_key=PV_ACCESS_KEY
-            )
-            keyword_names = DEFAULT_KEYWORDS
-            print("[VOICE] Using built-in keywords:", keyword_names)
-
-        # Initialize microphone
-        pa = pyaudio.PyAudio()
-        stream = pa.open(
-            rate=porcupine.sample_rate,
-            channels=1,
-            format=pyaudio.paInt16,
-            input=True,
-            frames_per_buffer=512
-        )
-
+        # Adjust for ambient noise
+        print("[VOICE] Calibrating microphone for ambient noise...")
+        with microphone as source:
+            recognizer.adjust_for_ambient_noise(source, duration=1)
+        
         voice_ready = True
-        print("[VOICE] Listening for:", keyword_names)
+        print("[VOICE] Listening for wake words:", WAKE_WORDS)
 
         while listening:
-            pcm = stream.read(512, exception_on_overflow=False)
-            pcm = struct.unpack_from("h" * 512, pcm)
-            index = porcupine.process(pcm)
-            if index >= 0:
-                keyword = keyword_names[index]
-                print(f"[VOICE DETECTED] {keyword}")
-                command_queue.put(keyword)
+            try:
+                with microphone as source:
+                    # Listen for audio with timeout
+                    audio = recognizer.listen(source, timeout=5, phrase_time_limit=3)
+                
+                # Recognize speech using Google Web Speech API
+                text = recognizer.recognize_google(audio).lower()
+                print(f"[VOICE HEARD] {text}")
+                
+                # Check if any wake word is in the heard text
+                for wake_word in WAKE_WORDS:
+                    if wake_word in text:
+                        print(f"[VOICE DETECTED] Wake word detected: {wake_word}")
+                        command_queue.put("jump")
+                        break
+
+            except sr.WaitTimeoutError:
+                # No speech detected in timeout period - this is normal
+                pass
+            except sr.UnknownValueError:
+                # Speech was unintelligible
+                pass
+            except sr.RequestError as e:
+                # API error
+                print(f"[VOICE ERROR] Could not request results from Google Speech Recognition service: {e}")
+            except Exception as e:
+                # Other errors
+                print(f"[VOICE ERROR] Unexpected error: {e}")
 
     except Exception as e:
-        print("[VOICE ERROR]:", e)
+        print("[VOICE ERROR] Failed to initialize:", e)
 
     finally:
         voice_ready = False
-        try:
-            stream.stop_stream()
-            stream.close()
-            pa.terminate()
-        except Exception:
-            pass
-        try:
-            porcupine.delete()
-        except Exception:
-            pass
         print("[VOICE] Listener stopped.")
 
 
