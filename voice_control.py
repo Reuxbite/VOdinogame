@@ -1,4 +1,4 @@
-
+import pvporcupine
 import os, threading, queue
 from settings import DEFAULT_KEYWORDS, PV_ACCESS_KEY
 
