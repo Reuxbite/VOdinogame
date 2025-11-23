@@ -1,7 +1,7 @@
 import pygame, os, sys, random, time
 from settings import *
 from scoreboard import save_score
-from voice_control import start_listening, command_queue, voice_ready
+import voice_control 
 
 pygame.init()
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -72,7 +72,8 @@ reset_game()
 game_speed = 8
 spawn_gap = 1500
 voice_mode = True
-start_listening()
+
+voice_control.start_listening()
 
 running = True
 while running:
@@ -97,11 +98,14 @@ while running:
             on_ground = False
             jump_sound.play()
 
-        if voice_mode and voice_ready:
+        if voice_mode and voice_control.voice_ready:
             try:
                 now = pygame.time.get_ticks()
-                while not command_queue.empty():
-                    cmd = command_queue.get_nowait().lower()
+                print("voice mode", voice_mode, "ready", voice_control.voice_ready, flush=True)
+                print("queue size =", voice_control.command_queue.qsize())
+                while not voice_control.command_queue.empty():
+                    cmd = voice_control.command_queue.get_nowait().lower()
+                    print("cmd = ", repr(cmd), 'type =', type(cmd))
                     print(f"[VOICE COMMAND RECEIVED] {cmd}  on_ground={on_ground} cooldown={now-last_jump_time}ms")
 
                     if "jump" in cmd or "jump-dino" in cmd or "porcupine" in cmd:
@@ -164,7 +168,7 @@ while running:
         score = int(time.time() - start_time)
     draw_text(f"Score: {score}", (10, 10))
     draw_text(f"Voice: {'ON' if voice_mode else 'OFF'}", (10, 40))
-    if voice_ready:
+    if voice_control.voice_ready:
         draw_text("Listening...", (WIDTH - 150, 10), (0, 255, 0), 20)
 
     if dead:
