@@ -43,10 +43,18 @@ def draw_text(text, pos, color=(0,0,0), size=28):
     screen.blit(font2.render(text, True, color), pos)
 
 def spawn_cactus():
-    rect = cactus_img.get_rect()
-    rect.x = WIDTH + random.randint(100, 300)
-    rect.y = GROUND_Y - rect.height
-    obstacles.append(rect)
+    img_rect = cactus_img.get_rect()
+    img_rect.x = WIDTH + random.randint(100, 300)
+    img_rect.y = GROUND_Y - img_rect.height
+    # collision rect is a shrunk copy to avoid overly-large hitboxes
+    col_rect = img_rect.copy()
+    try:
+        shrink = CACTUS_HITBOX_SHRINK
+        col_rect.inflate_ip(-shrink[0], -shrink[1])
+    except Exception:
+        # fallback to a reasonable default
+        col_rect.inflate_ip(-20, -10)
+    obstacles.append((img_rect, col_rect))
 
 def reset_game():
     global player, vel_y, on_ground, obstacles, last_spawn, start_time, dead, score, cactus_active, last_jump_time
@@ -64,8 +72,7 @@ def reset_game():
     last_jump_time = pygame.time.get_ticks() - JUMP_COOLDOWN
     pygame.mixer.music.play(-1)
 
-# define cooldown and last jump time before calling reset_game
-JUMP_COOLDOWN = 600
+# last jump time (uses JUMP_COOLDOWN from settings)
 last_jump_time = 0
 
 reset_game()
@@ -134,14 +141,15 @@ while running:
         spawn_cactus()
         last_spawn = now
 
-    for r in obstacles:
-        r.x -= game_speed
-        screen.blit(cactus_img, (r.x, r.y))
-    obstacles = [r for r in obstacles if r.x > -60]
+    for img_r, col_r in obstacles:
+        img_r.x -= game_speed
+        col_r.x -= game_speed
+        screen.blit(cactus_img, (img_r.x, img_r.y))
+    obstacles = [(ir, cr) for (ir, cr) in obstacles if ir.x > -60]
 
     if not dead:
-        for r in obstacles:
-            if player.colliderect(r):
+        for img_r, col_r in obstacles:
+            if player.colliderect(col_r):
                 dead = True
                 dead_sound.play()
                 pygame.mixer.music.stop()
