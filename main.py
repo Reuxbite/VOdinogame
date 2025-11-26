@@ -108,16 +108,16 @@ while running:
         if voice_mode and voice_control.voice_ready:
             try:
                 now = pygame.time.get_ticks()
-                print("voice mode", voice_mode, "ready", voice_control.voice_ready, flush=True)
-                print("queue size =", voice_control.command_queue.qsize())
-                while not voice_control.command_queue.empty():
+                # Process at most one voice command per frame to avoid long main-thread work
+                try:
                     cmd = voice_control.command_queue.get_nowait().lower()
-                    print("cmd = ", repr(cmd), 'type =', type(cmd))
-                    print(f"[VOICE COMMAND RECEIVED] {cmd}  on_ground={on_ground} cooldown={now-last_jump_time}ms")
+                except Exception:
+                    cmd = None
 
+                if cmd:
+                    print(f"[VOICE COMMAND RECEIVED] {cmd}  on_ground={on_ground} cooldown={now-last_jump_time}ms")
                     if "jump" in cmd or "jump-dino" in cmd or "porcupine" in cmd:
                         if on_ground and now - last_jump_time > JUMP_COOLDOWN:
-                            print("[VOICE JUMP TRIGGERED]")
                             vel_y = -JUMP_STRENGTH
                             on_ground = False
                             jump_sound.play()

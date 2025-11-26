@@ -9,7 +9,8 @@ except Exception as e:
     print("[VOICE] Missing dependencies:", e)
     VOICE_AVAILABLE = False
 
-command_queue = queue.Queue()
+# Bounded queue to avoid unbounded growth and reduce contention
+command_queue = queue.Queue(maxsize=10)
 voice_ready = False
 listening = True
 
@@ -51,12 +52,14 @@ def _voice_loop():
 
         # Initialize microphone
         pa = pyaudio.PyAudio()
+        # Smaller frames_per_buffer reduces detection latency (slightly higher CPU)
+        frames_per_buffer = 64
         stream = pa.open(
             rate=porcupine.sample_rate,
             channels=1,
             format=pyaudio.paInt16,
             input=True,
-            frames_per_buffer=512
+            frames_per_buffer=frames_per_buffer
         )
 
         voice_ready = True
@@ -69,7 +72,12 @@ def _voice_loop():
             if index >= 0:
                 keyword = keyword_names[index]
                 print(f"[VOICE DETECTED] {keyword}")
-                command_queue.put(keyword)
+                try:
+                    # try non-blocking enqueue; drop if queue is full to avoid blocking audio thread
+                    command_queue.put_nowait(keyword)
+                except queue.Full:
+                    # drop the detection if main thread is too slow; prefer audio continuity
+                    pass
 
     except Exception as e:
         print("[VOICE ERROR]:", e)
